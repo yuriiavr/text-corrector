@@ -5,6 +5,7 @@ import time
 import keyboard
 import pyperclip
 import winreg
+import ctypes
 from google import genai
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, 
@@ -13,9 +14,19 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QIcon, QAction, QKeyEvent, QKeySequence
 
+user32 = ctypes.WinDLL('user32', use_last_error=True)
+VK_CONTROL = 0x11
+VK_C = 0x43
+VK_V = 0x56
+KEYEVENTF_KEYUP = 0x0002
+
+def send_key_event(vk, up=False):
+    flags = KEYEVENTF_KEYUP if up else 0
+    user32.keybd_event(vk, 0, flags, 0)
+
 PROMPTS = {
     "fix": "Fix grammar and punctuation. Return ONLY the corrected text.",
-    "pro": "Rewrite this text to be professional, polite, and formal for business communication. Return ONLY the text.",
+    "polite": "Rewrite this text to be professional, polite, and formal for business communication. Return ONLY the text.",
     "translate": "Translate this text to English, ensuring natural flow and correct grammar. Return ONLY the translation.",
 }
 
@@ -25,11 +36,8 @@ class HotkeyLineEdit(QLineEdit):
         self.setReadOnly(True)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("""
-            background: #2d2d2d; 
-            border: 2px solid #3e3e42; 
-            color: #0078d4; 
-            font-weight: bold;
-            text-transform: uppercase;
+            background: #2d2d2d; border: 2px solid #3e3e42; color: #0078d4; 
+            font-weight: bold; text-transform: uppercase;
         """)
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -56,9 +64,17 @@ class AIFixerApp(QWidget):
         self.setup_ai()
         self.setup_hotkey()
 
+    def get_app_icon(self):
+        for ext in ["png", "ico"]:
+            icon_path = os.path.join(os.path.dirname(__file__), f"icon.{ext}")
+            if os.path.exists(icon_path):
+                return QIcon(icon_path)
+        return self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+
     def init_ui(self):
         self.setWindowTitle("AI Fixer Settings")
-        self.setFixedSize(350, 550)
+        self.setWindowIcon(self.get_app_icon())
+        self.setFixedSize(350, 600)
         self.setStyleSheet("""
             QWidget { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI'; }
             QLabel { color: #aaaaaa; font-size: 11px; font-weight: bold; margin-top: 10px; }
@@ -82,9 +98,8 @@ class AIFixerApp(QWidget):
         
         layout.addWidget(QLabel("AI MODEL"))
         self.model_select = QComboBox()
-        self.model_options = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite-preview"]
-        self.model_select.addItems(self.model_options)
-        self.model_select.setCurrentText(self.settings.value("model", "gemini-2.5-flash"))
+        self.model_select.addItems(["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"])
+        self.model_select.setCurrentText(self.settings.value("model", "gemini-2.0-flash"))
         layout.addWidget(self.model_select)
 
         layout.addWidget(QLabel("HOTKEY"))
@@ -94,10 +109,21 @@ class AIFixerApp(QWidget):
         
         layout.addWidget(QLabel("AI MODE"))
         self.mode_select = QComboBox()
-        self.mode_select.addItems(["fix", "pro", "translate"])
-        self.mode_select.setCurrentText(self.settings.value("mode", "fix"))
+        self.mode_select.addItems(["fix", "polite", "translate", "custom"])
+        current_mode = self.settings.value("mode", "fix")
+        self.mode_select.setCurrentText(current_mode)
+        self.mode_select.currentTextChanged.connect(self.toggle_custom_input)
         layout.addWidget(self.mode_select)
         
+        self.custom_label = QLabel("CUSTOM PROMPT")
+        self.custom_input = QLineEdit()
+        self.custom_input.setPlaceholderText("e.g. Summarize this text...")
+        self.custom_input.setText(self.settings.value("custom_prompt", ""))
+        layout.addWidget(self.custom_label)
+        layout.addWidget(self.custom_input)
+        
+        self.toggle_custom_input(current_mode)
+
         self.autolaunch_cb = QCheckBox("Launch on startup")
         self.autolaunch_cb.setChecked(self.settings.value("autolaunch", False, type=bool))
         layout.addWidget(self.autolaunch_cb)
@@ -107,46 +133,40 @@ class AIFixerApp(QWidget):
         layout.addWidget(save_btn)
         self.setLayout(layout)
 
+    def toggle_custom_input(self, mode):
+        is_custom = (mode == "custom")
+        self.custom_label.setVisible(is_custom)
+        self.custom_input.setVisible(is_custom)
+
     def set_autostart(self, state):
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        app_name = "AIFixer"
         exe_path = f'"{os.path.realpath(sys.argv[0])}"'
-        
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-            if state:
-                winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, exe_path)
+            if state: winreg.SetValueEx(key, "AIFixer", 0, winreg.REG_SZ, exe_path)
             else:
-                try:
-                    winreg.DeleteValue(key, app_name)
-                except FileNotFoundError:
-                    pass
+                try: winreg.DeleteValue(key, "AIFixer")
+                except FileNotFoundError: pass
             winreg.CloseKey(key)
-        except:
-            pass
+        except: pass
 
     def setup_ai(self):
         api_key = self.settings.value("apiKey")
-        if api_key:
-            self.client = genai.Client(api_key=api_key)
-        else:
-            self.client = None
+        if api_key: self.client = genai.Client(api_key=api_key)
 
     def setup_hotkey(self):
         keyboard.unhook_all()
         hk = self.settings.value("hotkey", "alt+shift+g")
-        try:
-            keyboard.add_hotkey(hk, self.trigger_fix)
-        except:
-            pass
+        try: keyboard.add_hotkey(hk, self.trigger_fix)
+        except: pass
 
     def save_settings(self):
         self.settings.setValue("apiKey", self.key_input.text())
         self.settings.setValue("model", self.model_select.currentText())
         self.settings.setValue("hotkey", self.hotkey_input.text())
         self.settings.setValue("mode", self.mode_select.currentText())
+        self.settings.setValue("custom_prompt", self.custom_input.text())
         self.settings.setValue("autolaunch", self.autolaunch_cb.isChecked())
-        
         self.set_autostart(self.autolaunch_cb.isChecked())
         self.setup_ai()
         self.setup_hotkey()
@@ -156,78 +176,67 @@ class AIFixerApp(QWidget):
         threading.Thread(target=self.fix_text, daemon=True).start()
 
     def fix_text(self):
-        if self.is_processing or not self.client:
-            return
-
+        if self.is_processing or not self.client: return
         self.is_processing = True
-        
         try:
-            time.sleep(0.4) 
-            pyperclip.copy("") 
+            time.sleep(0.5)
+            pyperclip.copy("")
             
-            keyboard.press('ctrl')
-            keyboard.press('c')
+            send_key_event(VK_CONTROL, False)
+            send_key_event(VK_C, False)
             time.sleep(0.1)
-            keyboard.release('c')
-            keyboard.release('ctrl')
+            send_key_event(VK_C, True)
+            send_key_event(VK_CONTROL, True)
             
-            time.sleep(0.5) 
-            original_text = pyperclip.paste()
+            original_text = ""
+            for _ in range(15):
+                time.sleep(0.1)
+                original_text = pyperclip.paste()
+                if original_text.strip(): break
             
             if not original_text.strip():
-                keyboard.press_and_release('ctrl+c')
-                time.sleep(0.5)
-                original_text = pyperclip.paste()
-                if not original_text.strip():
-                    return
+                self.is_processing = False
+                return
 
             mode = self.settings.value("mode", "fix")
-            active_model = self.settings.value("model", "gemini-2.5-flash")
-            
+            if mode == "custom":
+                instructions = self.settings.value("custom_prompt", "Return only corrected text.")
+            else:
+                instructions = PROMPTS.get(mode, PROMPTS["fix"])
+
             response = self.client.models.generate_content(
-                model=active_model,
-                contents=f"{PROMPTS[mode]}\n\nText: {original_text}"
+                model=self.settings.value("model", "gemini-2.0-flash"),
+                contents=f"{instructions}\n\nText: {original_text}"
             )
             
-            fixed = response.text
-            if fixed:
-                pyperclip.copy(fixed.strip())
+            if response.text:
+                pyperclip.copy(response.text.strip())
                 time.sleep(0.2)
-                keyboard.press_and_release('ctrl+v')
-
-        except:
-            pass
-        finally:
-            self.is_processing = False
+                send_key_event(VK_CONTROL, False)
+                send_key_event(VK_V, False)
+                time.sleep(0.1)
+                send_key_event(VK_V, True)
+                send_key_event(VK_CONTROL, True)
+        except: pass
+        finally: self.is_processing = False
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     win = AIFixerApp()
     
-    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
-    if os.path.exists(icon_path):
-        tray_icon = QIcon(icon_path)
-    else:
-        tray_icon = app.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
-        
+    tray_icon = win.get_app_icon()
     tray = QSystemTrayIcon(tray_icon, win)
     menu = QMenu()
-    
-    settings_action = QAction("⚙️ Settings", win)
-    settings_action.triggered.connect(win.show)
-    
-    quit_action = QAction("Exit", win)
-    quit_action.triggered.connect(app.quit)
-    
-    menu.addAction(settings_action)
+    s_act = QAction("⚙️ Settings", win)
+    s_act.triggered.connect(win.show)
+    q_act = QAction("Exit", win)
+    q_act.triggered.connect(app.quit)
+    menu.addAction(s_act)
     menu.addSeparator()
-    menu.addAction(quit_action)
-    
+    menu.addAction(q_act)
     tray.setContextMenu(menu)
     tray.show()
     
-    if not win.settings.value("apiKey"): 
-        win.show()
-        
+    if not win.settings.value("apiKey"): win.show()
     sys.exit(app.exec())
