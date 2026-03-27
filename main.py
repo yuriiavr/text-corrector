@@ -65,10 +65,9 @@ class AIFixerApp(QWidget):
         self.setup_hotkey()
 
     def get_app_icon(self):
-        for ext in ["png", "ico"]:
-            icon_path = os.path.join(os.path.dirname(__file__), f"icon.{ext}")
-            if os.path.exists(icon_path):
-                return QIcon(icon_path)
+        icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+        if os.path.exists(icon_path):
+            return QIcon(icon_path)
         return self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
 
     def init_ui(self):
@@ -98,8 +97,8 @@ class AIFixerApp(QWidget):
         
         layout.addWidget(QLabel("AI MODEL"))
         self.model_select = QComboBox()
-        self.model_select.addItems(["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro"])
-        self.model_select.setCurrentText(self.settings.value("model", "gemini-2.0-flash"))
+        self.model_select.addItems(["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite-preview"])
+        self.model_select.setCurrentText(self.settings.value("model", "gemini-2.5-flash"))
         layout.addWidget(self.model_select)
 
         layout.addWidget(QLabel("HOTKEY"))
@@ -205,7 +204,7 @@ class AIFixerApp(QWidget):
                 instructions = PROMPTS.get(mode, PROMPTS["fix"])
 
             response = self.client.models.generate_content(
-                model=self.settings.value("model", "gemini-2.0-flash"),
+                model=self.settings.value("model", "gemini-2.5-flash"),
                 contents=f"{instructions}\n\nText: {original_text}"
             )
             
@@ -225,7 +224,15 @@ if __name__ == "__main__":
     app.setQuitOnLastWindowClosed(False)
     win = AIFixerApp()
     
-    tray_icon = win.get_app_icon()
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
+    
+    if os.path.exists(icon_path):
+        tray_icon = QIcon(icon_path)
+    else:
+        tray_icon = app.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
+        
     tray = QSystemTrayIcon(tray_icon, win)
     menu = QMenu()
     s_act = QAction("⚙️ Settings", win)
